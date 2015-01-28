@@ -1,1 +1,4 @@
 rootProject.name = 'rxlogger'
+
+include 'rxlogger-server'
+include 'rxlogger-client'
