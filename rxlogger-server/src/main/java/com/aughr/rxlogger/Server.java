@@ -1,6 +1,7 @@
 package com.aughr.rxlogger;
 
 import io.netty.buffer.ByteBuf;
+import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.logging.LogLevel;
 import io.reactivex.netty.RxNetty;
 import io.reactivex.netty.pipeline.PipelineConfigurators;
@@ -13,6 +14,7 @@ import rx.Observable;
 import rx.functions.Action1;
 import rx.functions.Func1;
 import rx.observables.ConnectableObservable;
+import rx.subjects.PublishSubject;
 
 import java.nio.charset.Charset;
 import java.util.Random;
@@ -36,7 +38,7 @@ public class Server {
     }
 
     private final HttpServer<ByteBuf, ServerSentEvent> server;
-    private final Observable<Long> data;
+    private final PublishSubject<String> subject;
 
     public Server(int port) {
         this.server = RxNetty.newHttpServerBuilder(port, new Handler())
@@ -44,21 +46,7 @@ public class Server {
 //                .enableWireLogging(LogLevel.ERROR)
                 .build();
 
-        ConnectableObservable<Long> publish = Observable.interval(100, TimeUnit.MILLISECONDS).onBackpressureDrop().map(new Func1<Long, Long>() {
-            @Override
-            public Long call(Long aLong) {
-                return new Random().nextLong();
-            }
-        }).publish();
-        publish.connect();
-        this.data = publish;
-
-        data.forEach(new Action1<Long>() {
-            @Override
-            public void call(Long value) {
-                System.out.println(String.valueOf(value));
-            }
-        });
+        this.subject = PublishSubject.create();
     }
 
     public Server start() {
@@ -78,28 +66,17 @@ public class Server {
 
         @Override
         public Observable<Void> handle(HttpServerRequest<ByteBuf> request, final HttpServerResponse<ServerSentEvent> response) {
-//            return Observable.interval(100, TimeUnit.MILLISECONDS)
-//                    .flatMap(new Func1<Long, Observable<Void>>() {
-//                        @Override
-//                        public Observable<Void> call(Long interval) {
-//                            ByteBuf eventId = response.getAllocator().buffer().writeLong(interval);
-//                            ByteBuf data = response.getAllocator().buffer().writeLong(new Random().nextLong());
-//                            return response.writeAndFlush(ServerSentEvent.withEventId(eventId, data));
-//                        }
-//                    });
-            return data.flatMap(new Func1<Long, Observable<Void>>() {
-                @Override
-                public Observable<Void> call(Long value) {
-                    System.err.println("writing");
-                    ByteBuf buffer = response.getAllocator().buffer().writeBytes(String.valueOf(value).getBytes(Charset.forName("UTF-8")));
-                    try {
-                        Thread.sleep(1);
-                    } catch (InterruptedException e) {
-                        throw new RuntimeException(e);
-                    }
-                    System.err.printf("writing %d bytes\n", buffer.writerIndex());
-                    return response.writeAndFlush(new ServerSentEvent(buffer));
-                }
+            if (request.getHttpMethod() == HttpMethod.POST) {
+                return request.getContent().flatMap(content -> {
+                    subject.onNext(content.toString(Charset.forName("UTF-8")));
+                    return Observable.empty();
+                });
+            }
+
+            return subject.flatMap(value -> {
+                System.err.println("writing");
+                ByteBuf buffer = response.getAllocator().buffer().writeBytes(value.getBytes(Charset.forName("UTF-8")));
+                return response.writeAndFlush(new ServerSentEvent(buffer));
             });
         }
     }
